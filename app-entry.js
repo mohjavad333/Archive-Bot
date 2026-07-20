@@ -4,7 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const db = require('./db');
-const { downloadTelegramFile } = require('./media');
+const { downloadTelegramFile, MEDIA_DIR } = require('./media');
 
 // پروکسی فقط رو سیستم خودت لازمه (USE_PROXY=true تو .env محلی)
 let agent = undefined;
@@ -100,6 +100,7 @@ bot.on('message', async (ctx) => {
 const app = express();
 app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
+app.use('/media', express.static(MEDIA_DIR));
 
 app.get('/api/channels', (req, res) => {
   const channels = db.prepare('SELECT * FROM channels ORDER BY title').all();

@@ -1,5 +1,12 @@
 const Database = require('better-sqlite3');
-const db = new Database('archive.db');
+const path = require('path');
+
+// اگه رو Railway بودیم از پوشه‌ی دائمی استفاده کن، وگرنه (لوکال) همینجا کنار پروژه
+const dbPath = process.env.DATA_DIR
+  ? path.join(process.env.DATA_DIR, 'archive.db')
+  : path.join(__dirname, 'archive.db');
+
+const db = new Database(dbPath);
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS channels (
