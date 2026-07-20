@@ -18,10 +18,14 @@ const bot = new Telegraf(process.env.BOT_TOKEN, agent ? { telegram: { agent } } 
 // ---------- دستورات بات (همون قبلی‌ها) ----------
 bot.start((ctx) => {
   ctx.reply(
-    'سلام! 👋\n\nیه پست از هر کانالی که می‌خوای فوروارد کن برام.\n\nبرای دیدن آرشیو، رو دکمه‌ی زیر بزن.',
+    'سلام! 👋\n\nیه پست از هر کانالی که می‌خوای فوروارد کن برام.\n\nهر وقت خواستی آرشیو رو ببینی، دکمه‌ی پایین صفحه رو بزن 👇',
     {
       reply_markup: {
-        inline_keyboard: [[{ text: '📂 باز کردن آرشیو', web_app: { url: process.env.WEBAPP_URL } }]]
+        keyboard: [
+          [{ text: '📂 باز کردن آرشیو', web_app: { url: process.env.WEBAPP_URL } }]
+        ],
+        resize_keyboard: true,
+        is_persistent: true
       }
     }
   );
