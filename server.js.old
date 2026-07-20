@@ -1,0 +1,74 @@
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const path = require('path');
+const db = require('./db');
+
+const app = express();
+app.use(cors());
+app.use(express.static(path.join(__dirname, 'public')));
+
+// ۱. لیست کانال‌ها (با آخرین پیام و تعداد پست)
+app.get('/api/channels', (req, res) => {
+  const channels = db.prepare('SELECT * FROM channels ORDER BY title').all();
+
+  const result = channels.map((channel) => {
+    const count = db.prepare('SELECT COUNT(*) as c FROM posts WHERE channel_id = ?').get(channel.id).c;
+    const lastPost = db.prepare('SELECT * FROM posts WHERE channel_id = ? ORDER BY date DESC LIMIT 1').get(channel.id);
+
+    return {
+      id: channel.id,
+      title: channel.title,
+      username: channel.username,
+      postCount: count,
+      lastMessagePreview: lastPost ? (lastPost.text ? lastPost.text.slice(0, 60) : (lastPost.media_type === 'photo' ? '📷 عکس' : lastPost.media_type === 'video' ? '🎥 ویدیو' : '')) : '',
+      lastDate: lastPost ? lastPost.date : null
+    };
+  });
+
+  res.json(result);
+});
+
+// ۲. پست‌های یک کانال خاص (با پشتیبانی از سرچ داخل کانال با ?q=)
+app.get('/api/channels/:id/posts', (req, res) => {
+  const channelId = req.params.id;
+  const query = req.query.q;
+
+  let posts;
+  if (query) {
+    posts = db.prepare(`
+      SELECT * FROM posts
+      WHERE channel_id = ? AND text LIKE ?
+      ORDER BY date ASC
+    `).all(channelId, `%${query}%`);
+  } else {
+    posts = db.prepare('SELECT * FROM posts WHERE channel_id = ? ORDER BY date ASC').all(channelId);
+  }
+
+  res.json(posts);
+});
+
+// ۳. سرچ سراسری بین همه‌ی کانال‌ها
+app.get('/api/search', (req, res) => {
+  const query = req.query.q;
+  if (!query) {
+    return res.json([]);
+  }
+
+  const results = db.prepare(`
+    SELECT posts.*, channels.title as channel_title
+    FROM posts
+    JOIN channels ON posts.channel_id = channels.id
+    WHERE posts.text LIKE ?
+    ORDER BY posts.date DESC
+  `).all(`%${query}%`);
+
+  res.json(results);
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server turn on port ${PORT}`);
+});
+
+module.exports = app;

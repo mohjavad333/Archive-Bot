@@ -1,0 +1,215 @@
+require('dotenv').config();
+const { Telegraf } = require('telegraf');
+const { SocksProxyAgent } = require('socks-proxy-agent');
+const { downloadTelegramFile } = require('./media');
+const db = require('./db');
+
+const agent = new SocksProxyAgent('socks5h://127.0.0.1:9909');
+const bot = new Telegraf(process.env.BOT_TOKEN, {
+  telegram: { agent }
+});
+
+bot.start((ctx) => {
+  ctx.reply(
+    'سلام! 👋\n\n' +
+    'یه پست از هر کانالی که می‌خوای فوروارد کن برام، من ذخیره‌ش می‌کنم و دسته‌بندیش می‌کنم.\n\n' +
+    'برای دیدن آرشیو، رو دکمه‌ی زیر بزن یا از دکمه‌ی کنار جعبه‌ی پیام استفاده کن.',
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '📂 باز کردن آرشیو', web_app: { url: process.env.WEBAPP_URL } }]
+        ]
+      }
+    }
+  );
+});
+
+bot.command('ping', (ctx) => {
+  ctx.reply('pong ✅');
+});
+
+bot.command('archive', (ctx) => {
+  ctx.reply('📂 آرشیو کانال‌هات:', {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '📂 باز کردن آرشیو', web_app: { url: process.env.WEBAPP_URL } }]
+      ]
+    }
+  });
+});
+
+// دستور موقت برای دیدن محتوای دیتابیس (فعلاً برای تست)
+bot.command('debug', (ctx) => {
+  const channels = db.prepare('SELECT * FROM channels').all();
+  const posts = db.prepare('SELECT * FROM posts').all();
+  console.log('channels:', channels);
+  console.log('posts:', posts);
+  ctx.reply(`تعداد کانال‌ها: ${channels.length}\nتعداد پست‌ها: ${posts.length}`);
+});
+
+// نمایش لیست کانال‌ها به‌صورت دکمه
+bot.command('list', (ctx) => {
+  const channels = db.prepare('SELECT * FROM channels ORDER BY title').all();
+
+  if (channels.length === 0) {
+    return ctx.reply('هنوز هیچ پستی ذخیره نشده. یه پست از یه کانال فوروارد کن برام 📥');
+  }
+
+  const buttons = channels.map((channel) => {
+    const count = db.prepare('SELECT COUNT(*) as c FROM posts WHERE channel_id = ?').get(channel.id).c;
+    return [
+      {
+        text: `${channel.title} (${count})`,
+        callback_data: `channel_${channel.id}`
+      }
+    ];
+  });
+
+  ctx.reply('📋 لیست کانال‌ها:', {
+    reply_markup: {
+      inline_keyboard: buttons
+    }
+  });
+});
+
+// جستجو در متن پست‌های ذخیره‌شده
+bot.command('search', async (ctx) => {
+  const keyword = ctx.message.text.split(' ').slice(1).join(' ').trim();
+
+  if (!keyword) {
+    return ctx.reply('لطفاً بعد از دستور، کلمه‌ی موردنظرت رو بنویس.\nمثال: /search هوش مصنوعی');
+  }
+
+  const results = db.prepare(`
+    SELECT posts.*, channels.title as channel_title
+    FROM posts
+    JOIN channels ON posts.channel_id = channels.id
+    WHERE posts.text LIKE ?
+    ORDER BY posts.date DESC
+  `).all(`%${keyword}%`);
+
+  if (results.length === 0) {
+    return ctx.reply(`چیزی برای «${keyword}» پیدا نشد 🔍`);
+  }
+
+  await ctx.reply(`🔍 ${results.length} نتیجه برای «${keyword}»:`);
+
+  for (const post of results) {
+    try {
+      await ctx.reply(`📍 از کانال: ${post.channel_title}`);
+      await ctx.telegram.copyMessage(ctx.chat.id, post.chat_id, post.message_id);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    } catch (err) {
+      console.error('خطا در ارسال نتیجه:', err.message);
+    }
+  }
+});
+
+// نمایش همه‌ی پست‌های یک کانال به‌صورت فید (پشت سر هم)
+bot.action(/^channel_(.+)$/, async (ctx) => {
+  const channelId = ctx.match[1];
+  await ctx.answerCbQuery();
+
+  const channel = db.prepare('SELECT * FROM channels WHERE id = ?').get(channelId);
+  const posts = db.prepare('SELECT * FROM posts WHERE channel_id = ? ORDER BY date ASC').all(channelId);
+
+  if (posts.length === 0) {
+    return ctx.reply(`هیچ پستی از «${channel.title}» ذخیره نشده.`);
+  }
+
+  await ctx.reply(`📬 ${posts.length} پست از «${channel.title}»:`);
+
+  for (const post of posts) {
+    try {
+      await ctx.telegram.copyMessage(ctx.chat.id, post.chat_id, post.message_id);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    } catch (err) {
+      console.error('خطا در ارسال پست:', err.message);
+    }
+  }
+
+  await ctx.reply('⬆️ همه‌ی پست‌ها نمایش داده شدن.', {
+    reply_markup: {
+      inline_keyboard: [[{ text: '🔙 بازگشت به لیست کانال‌ها', callback_data: 'back_to_list' }]]
+    }
+  });
+});
+
+// بازگشت به لیست کانال‌ها
+bot.action('back_to_list', async (ctx) => {
+  await ctx.answerCbQuery();
+
+  const channels = db.prepare('SELECT * FROM channels ORDER BY title').all();
+  if (channels.length === 0) {
+    return ctx.reply('هنوز هیچ پستی ذخیره نشده.');
+  }
+
+  const buttons = channels.map((channel) => {
+    const count = db.prepare('SELECT COUNT(*) as c FROM posts WHERE channel_id = ?').get(channel.id).c;
+    return [{ text: `${channel.title} (${count})`, callback_data: `channel_${channel.id}` }];
+  });
+
+  await ctx.reply('📋 لیست کانال‌ها:', {
+    reply_markup: { inline_keyboard: buttons }
+  });
+});
+
+// گرفتن پیام‌های فوروارد شده از کانال
+bot.on('message', async (ctx) => {
+  const msg = ctx.message;
+
+  if (msg.forward_origin && msg.forward_origin.type === 'channel') {
+    const channel = msg.forward_origin.chat;
+    const channelId = channel.id;
+    const channelTitle = channel.title;
+    const channelUsername = channel.username || null;
+
+    // ذخیره یا آپدیت کانال
+    db.prepare(`
+      INSERT INTO channels (id, title, username)
+      VALUES (?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET title = excluded.title, username = excluded.username
+    `).run(channelId, channelTitle, channelUsername);
+
+    // تشخیص و دانلود مدیا (اگه وجود داشت)
+    let mediaType = 'none';
+    let mediaFile = null;
+
+    try {
+      if (msg.photo && msg.photo.length > 0) {
+        const largestPhoto = msg.photo[msg.photo.length - 1]; // بزرگترین سایز عکس
+        mediaType = 'photo';
+        mediaFile = await downloadTelegramFile(bot, largestPhoto.file_id, 'jpg', agent);
+      } else if (msg.video) {
+        mediaType = 'video';
+        mediaFile = await downloadTelegramFile(bot, msg.video.file_id, 'mp4', agent);
+      }
+    } catch (err) {
+      console.error('خطا در دانلود مدیا:', err.message);
+    }
+
+    // ذخیره خود پست
+    db.prepare(`
+      INSERT INTO posts (channel_id, chat_id, message_id, text, media_type, media_file)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(channelId, ctx.chat.id, msg.message_id, msg.text || msg.caption || null, mediaType, mediaFile);
+
+    ctx.reply(`✅ پست از کانال «${channelTitle}» ذخیره شد.${mediaType !== 'none' ? ' (با ' + (mediaType === 'photo' ? 'عکس' : 'ویدیو') + ')' : ''}`);
+  } else {
+    ctx.reply('این پیام از یه کانال فوروارد نشده بود 🤔\nیه پست رو مستقیم از کانال فوروارد کن برام.');
+  }
+});
+
+bot.launch().then(() => {
+  bot.telegram.setChatMenuButton({
+    menuButton: {
+      type: 'web_app',
+      text: 'آرشیو',
+      web_app: { url: process.env.WEBAPP_URL }
+    }
+  });
+});
+console.log('bot turn on seccesfully👀');
+
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
